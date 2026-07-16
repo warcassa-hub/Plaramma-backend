@@ -1,13 +1,9 @@
-const { createClient } = require('@supabase/supabase-client');
-
-// Supabase ulanish kalitlari (Vercel avtomatik bergan o'zgaruvchilardan o'qiydi)
+// HECH QANDAY KUTUBXONALARSIZ (FAQAT SUPABASE REST API ORQALI)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 module.exports = async (req, res) => {
-    // CORS sozlamalari (Admin panel va Flutter bemalol ulanishi uchun)
+    // CORS ruxsatnomalari (Admin panel va Flutter uchun)
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -24,16 +20,23 @@ module.exports = async (req, res) => {
     const { url, method, body } = req;
 
     try {
-        // 1. GET /api/users — Barcha foydalanuvchilarni olish (Admin panel uchun)
+        // 1. GET /api/users — Foydalanuvchilarni olish
         if (url === '/api/users' && method === 'GET') {
-            const { data, error } = await supabase
-                .from('users')
-                .select('*')
-                .order('created_at', { ascending: false });
+            const response = await fetch(`${supabaseUrl}/rest/v1/users?select=*&order=created_at.desc`, {
+                headers: {
+                    'apikey': supabaseKey,
+                    'Authorization': `Bearer ${supabaseKey}`
+                }
+            });
 
-            if (error) throw error;
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error("Supabase Fetch Error: " + errText);
+            }
 
-            // Har bir foydalanuvchi uchun qolgan kunlarni hisoblab qo'shamiz
+            const data = await response.json();
+
+            // Kunlarni hisoblash
             const usersWithDays = data.map(user => {
                 const createdDate = new Date(user.created_at);
                 const today = new Date();
@@ -52,7 +55,7 @@ module.exports = async (req, res) => {
             return res.status(200).json(usersWithDays);
         }
 
-        // 2. POST /api/register — Qurilmani tekshirish / ro'yxatdan o'tkazish (Flutter uchun)
+        // 2. POST /api/register — Qurilmani tekshirish/qo'shish
         if (url === '/api/register' && method === 'POST') {
             const { deviceId, deviceName } = body;
 
@@ -60,26 +63,40 @@ module.exports = async (req, res) => {
                 return res.status(400).json({ error: "deviceId kiritilishi shart!" });
             }
 
-            // Avval bazada bormi tekshiramiz
-            let { data: user, error: fetchError } = await supabase
-                .from('users')
-                .select('*')
-                .eq('deviceId', deviceId)
-                .single();
+            // Birinchi navbatda tekshiramiz
+            const checkRes = await fetch(`${supabaseUrl}/rest/v1/users?deviceId=eq.${encodeURIComponent(deviceId)}&select=*`, {
+                headers: {
+                    'apikey': supabaseKey,
+                    'Authorization': `Bearer ${supabaseKey}`
+                }
+            });
 
-            // Agar foydalanuvchi topilmasa, yangi yaratamiz
+            const checkData = await checkRes.json();
+            let user = checkData[0];
+
+            // Agar bazada yo'q bo'lsa, yangi qo'shamiz
             if (!user) {
-                const { data: newUser, error: insertError } = await supabase
-                    .from('users')
-                    .insert([{ deviceId, deviceName }])
-                    .select()
-                    .single();
+                const insertRes = await fetch(`${supabaseUrl}/rest/v1/users`, {
+                    method: 'POST',
+                    headers: {
+                        'apikey': supabaseKey,
+                        'Authorization': `Bearer ${supabaseKey}`,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify({ deviceId, deviceName })
+                });
 
-                if (insertError) throw insertError;
-                user = newUser;
+                if (!insertRes.ok) {
+                    const insertErr = await insertRes.text();
+                    throw new Error("Supabase Insert Error: " + insertErr);
+                }
+
+                const insertData = await insertRes.json();
+                user = insertData[0];
             }
 
-            // Kunlarni hisoblash logikasi (30 kunlik sinov muddati)
+            // Kunlarni hisoblash
             const createdDate = new Date(user.created_at);
             const today = new Date();
             const diffTime = Math.abs(today - createdDate);
@@ -97,26 +114,34 @@ module.exports = async (req, res) => {
             });
         }
 
-        // 3. POST /api/block — Qurilmani bloklash yoki ochish (Admin panel uchun)
+        // 3. POST /api/block — Qurilmani bloklash/ochish
         if (url === '/api/block' && method === 'POST') {
             const { deviceId, isBlocked } = body;
 
-            const { data, error } = await supabase
-                .from('users')
-                .update({ isBlocked: isBlocked })
-                .eq('deviceId', deviceId)
-                .select();
+            const updateRes = await fetch(`${supabaseUrl}/rest/v1/users?deviceId=eq.${encodeURIComponent(deviceId)}`, {
+                method: 'PATCH',
+                headers: {
+                    'apikey': supabaseKey,
+                    'Authorization': `Bearer ${supabaseKey}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=representation'
+                },
+                body: JSON.stringify({ isBlocked: isBlocked })
+            });
 
-            if (error) throw error;
+            if (!updateRes.ok) {
+                const updateErr = await updateRes.text();
+                throw new Error("Supabase Update Error: " + updateErr);
+            }
 
-            return res.status(200).json({ success: true, data });
+            const updateData = await updateRes.json();
+            return res.status(200).json({ success: true, data: updateData });
         }
 
-        // Agar noto'g'ri API manzilga murojaat qilinsa
         return res.status(404).json({ error: "Sahifa topilmadi" });
 
     } catch (err) {
-        console.error(err);
+        console.error("Xatolik:", err.message);
         return res.status(500).json({ error: "Server xatosi: " + err.message });
     }
 };
