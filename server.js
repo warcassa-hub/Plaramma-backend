@@ -1,101 +1,122 @@
-import express from "express";
-import cors from "cors";
-import { kv } from "@vercel/kv";
+const { createClient } = require('@supabase/supabase-client');
 
-const app = express();
-app.use(express.json());
-app.use(cors());
+// Supabase ulanish kalitlari (Vercel avtomatik bergan o'zgaruvchilardan o'qiydi)
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
-// 1. Qurilmani tekshirish va ro'yxatdan o'tkazish
-app.post("/api/register", async (req, res) => {
-  const { deviceId, deviceName } = req.body;
-  if (!deviceId) return res.status(400).json({ error: "Qurilma ID si yo'q" });
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-  try {
-    // Vercel KV bazasidan foydalanuvchilarni olamiz
-    let users = (await kv.get("users")) || [];
-    let user = users.find((u) => u.deviceId === deviceId);
-    const now = new Date();
+module.exports = async (req, res) => {
+    // CORS sozlamalari (Admin panel va Flutter bemalol ulanishi uchun)
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader(
+        'Access-Control-Allow-Headers',
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+    );
 
-    if (!user) {
-      user = {
-        deviceId,
-        deviceName,
-        createdAt: now.toISOString(),
-        isBlocked: false,
-      };
-      users.push(user);
-      await kv.set("users", users); // Yangi ro'yxatni saqlaymiz
+    if (req.method === 'OPTIONS') {
+        res.status(200).end();
+        return;
     }
 
-    const createdDate = new Date(user.createdAt);
-    const diffTime = Math.abs(now - createdDate);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    const isExpired = diffDays > 30;
+    const { url, method, body } = req;
 
-    res.json({
-      deviceId: user.deviceId,
-      isBlocked: user.isBlocked,
-      isExpired: isExpired,
-      daysUsed: diffDays,
-      daysLeft: Math.max(0, 30 - diffDays),
-    });
-  } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Baza bilan ulanishda xatolik: " + error.message });
-  }
-});
+    try {
+        // 1. GET /api/users — Barcha foydalanuvchilarni olish (Admin panel uchun)
+        if (url === '/api/users' && method === 'GET') {
+            const { data, error } = await supabase
+                .from('users')
+                .select('*')
+                .order('created_at', { ascending: false });
 
-// 2. Admin uchun barcha foydalanuvchilarni olish
-app.get("/api/users", async (req, res) => {
-  try {
-    const users = (await kv.get("users")) || [];
-    const now = new Date();
+            if (error) throw error;
 
-    const formattedUsers = users.map((user) => {
-      const createdDate = new Date(user.createdAt);
-      const diffTime = Math.abs(now - createdDate);
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      return {
-        ...user,
-        daysLeft: Math.max(0, 30 - diffDays),
-        isExpired: diffDays > 30,
-      };
-    });
+            // Har bir foydalanuvchi uchun qolgan kunlarni hisoblab qo'shamiz
+            const usersWithDays = data.map(user => {
+                const createdDate = new Date(user.created_at);
+                const today = new Date();
+                const diffTime = Math.abs(today - createdDate);
+                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                const daysLeft = Math.max(0, 30 - diffDays);
+                const isExpired = diffDays >= 30;
 
-    res.json(formattedUsers);
-  } catch (error) {
-    res.status(500).json({ error: "Xatolik: " + error.message });
-  }
-});
+                return {
+                    ...user,
+                    daysLeft,
+                    isExpired
+                };
+            });
 
-// 3. Admin orqali qurilmani bloklash / ochish
-app.post("/api/block", async (req, res) => {
-  const { deviceId, isBlocked } = req.body;
-  try {
-    let users = (await kv.get("users")) || [];
-    let user = users.find((u) => u.deviceId === deviceId);
+            return res.status(200).json(usersWithDays);
+        }
 
-    if (user) {
-      user.isBlocked = isBlocked;
-      await kv.set("users", users); // O'zgarishni bazada yangilaymiz
-      res.json({
-        success: true,
-        message: `Holat o'zgardi. Blok: ${isBlocked}`,
-      });
-    } else {
-      res.status(404).json({ error: "Foydalanuvchi topilmadi" });
+        // 2. POST /api/register — Qurilmani tekshirish / ro'yxatdan o'tkazish (Flutter uchun)
+        if (url === '/api/register' && method === 'POST') {
+            const { deviceId, deviceName } = body;
+
+            if (!deviceId) {
+                return res.status(400).json({ error: "deviceId kiritilishi shart!" });
+            }
+
+            // Avval bazada bormi tekshiramiz
+            let { data: user, error: fetchError } = await supabase
+                .from('users')
+                .select('*')
+                .eq('deviceId', deviceId)
+                .single();
+
+            // Agar foydalanuvchi topilmasa, yangi yaratamiz
+            if (!user) {
+                const { data: newUser, error: insertError } = await supabase
+                    .from('users')
+                    .insert([{ deviceId, deviceName }])
+                    .select()
+                    .single();
+
+                if (insertError) throw insertError;
+                user = newUser;
+            }
+
+            // Kunlarni hisoblash logikasi (30 kunlik sinov muddati)
+            const createdDate = new Date(user.created_at);
+            const today = new Date();
+            const diffTime = Math.abs(today - createdDate);
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+            const daysLeft = Math.max(0, 30 - diffDays);
+            const isExpired = diffDays >= 30;
+
+            return res.status(200).json({
+                deviceId: user.deviceId,
+                deviceName: user.deviceName,
+                isBlocked: user.isBlocked,
+                isExpired: isExpired,
+                daysUsed: diffDays,
+                daysLeft: daysLeft
+            });
+        }
+
+        // 3. POST /api/block — Qurilmani bloklash yoki ochish (Admin panel uchun)
+        if (url === '/api/block' && method === 'POST') {
+            const { deviceId, isBlocked } = body;
+
+            const { data, error } = await supabase
+                .from('users')
+                .update({ isBlocked: isBlocked })
+                .eq('deviceId', deviceId)
+                .select();
+
+            if (error) throw error;
+
+            return res.status(200).json({ success: true, data });
+        }
+
+        // Agar noto'g'ri API manzilga murojaat qilinsa
+        return res.status(404).json({ error: "Sahifa topilmadi" });
+
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ error: "Server xatosi: " + err.message });
     }
-  } catch (error) {
-    res.status(500).json({ error: "Xatolik: " + error.message });
-  }
-});
-
-// Mahalliy tekshirish uchun (Vercel-dan tashqarida ham ishlab turishi uchun)
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server http://localhost:${PORT} portida ishga tushdi`);
-});
-
-export default app;
+};
