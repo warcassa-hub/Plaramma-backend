@@ -1,4 +1,4 @@
-// HECH QANDAY KUTUBXONALARSIZ (FAQAT SUPABASE REST API ORQALI)
+// FAQAT SUPABASE REST API BILAN ISHLAYDIGAN SERVER KODI
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
@@ -17,11 +17,12 @@ module.exports = async (req, res) => {
         return;
     }
 
-    const { url, method, body } = req;
+    // Vercel-da url ko'pincha so'rov yo'lini o'z ichiga oladi, uni tozalab olamiz
+    const cleanUrl = req.url.split('?')[0];
 
     try {
         // 1. GET /api/users — Foydalanuvchilarni olish
-        if (url === '/api/users' && method === 'GET') {
+        if (cleanUrl === '/api/users' && req.method === 'GET') {
             const response = await fetch(`${supabaseUrl}/rest/v1/users?select=*&order=created_at.desc`, {
                 headers: {
                     'apikey': supabaseKey,
@@ -56,8 +57,8 @@ module.exports = async (req, res) => {
         }
 
         // 2. POST /api/register — Qurilmani tekshirish/qo'shish
-        if (url === '/api/register' && method === 'POST') {
-            const { deviceId, deviceName } = body;
+        if (cleanUrl === '/api/register' && req.method === 'POST') {
+            const { deviceId, deviceName } = req.body || {};
 
             if (!deviceId) {
                 return res.status(400).json({ error: "deviceId kiritilishi shart!" });
@@ -115,8 +116,8 @@ module.exports = async (req, res) => {
         }
 
         // 3. POST /api/block — Qurilmani bloklash/ochish
-        if (url === '/api/block' && method === 'POST') {
-            const { deviceId, isBlocked } = body;
+        if (cleanUrl === '/api/block' && req.method === 'POST') {
+            const { deviceId, isBlocked } = req.body || {};
 
             const updateRes = await fetch(`${supabaseUrl}/rest/v1/users?deviceId=eq.${encodeURIComponent(deviceId)}`, {
                 method: 'PATCH',
@@ -138,7 +139,7 @@ module.exports = async (req, res) => {
             return res.status(200).json({ success: true, data: updateData });
         }
 
-        return res.status(404).json({ error: "Sahifa topilmadi" });
+        return res.status(404).json({ error: "Sahifa topilmadi: " + cleanUrl });
 
     } catch (err) {
         console.error("Xatolik:", err.message);
