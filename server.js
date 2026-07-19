@@ -33,20 +33,19 @@ app.get('/api/users', async (req, res) => {
 
         const data = await response.json();
 
-        // Ma'lumotlarni admin panel va Flutter formalariga moslash
+        // Ma'lumotlarni admin panel formatiga moslash
         const processedUsers = data.map(user => {
-            // Yaratilgan kundan boshlab 30 kunlik sinov muddatini hisoblash
             const cDate = new Date(user.created_at);
-            cDate.setDate(cDate.getDate() + 30);
+            cDate.setDate(cDate.getDate() + 30); // 30 kunlik sinov muddati
 
             return {
                 id: user.id,
                 deviceId: user.deviceId,
-                deviceName: user.deviceName,
-                name: "Foydalanuvchi #" + user.id, // jadvalda name yo'qligi uchun dinamik ID beramiz
-                phone: "Kiritilmagan",
+                deviceName: user.deviceName || "Noma'lum qurilma",
+                name: user.name || "Ismsiz Foydalanuvchi",
+                phone: user.phone || "Kiritilmagan",
                 trialEnd: cDate.toISOString(),
-                blocked: user.isBlocked ?? false // bazadagi 'isBlocked'ni 'blocked'ga o'giramiz
+                blocked: user.isBlocked ?? false
             };
         });
 
@@ -60,7 +59,7 @@ app.get('/api/users', async (req, res) => {
 // 2. POST /api/register — Qurilmani ro'yxatdan o'tkazish (Flutter uchun)
 app.post('/api/register', async (req, res) => {
     try {
-        const { deviceId, deviceName } = req.body;
+        const { name, phone, deviceId, deviceName } = req.body;
 
         if (!deviceId) {
             return res.status(400).json({ error: "deviceId kiritilishi shart!" });
@@ -77,7 +76,7 @@ app.post('/api/register', async (req, res) => {
         const checkData = await checkRes.json();
         let user = checkData[0];
 
-        // Agar qurilma bazada bo'lmasa, faqat bor ustunlar bilan yangi yaratamiz
+        // Agar qurilma bazada bo'lmasa, yangi yaratamiz
         if (!user) {
             const insertRes = await fetch(`${supabaseUrl}/rest/v1/users`, {
                 method: 'POST',
@@ -90,6 +89,8 @@ app.post('/api/register', async (req, res) => {
                 body: JSON.stringify({ 
                     deviceId: deviceId, 
                     deviceName: deviceName || 'Noma\'lum qurilma',
+                    name: name || '',
+                    phone: phone || '',
                     isBlocked: false
                 })
             });
@@ -107,7 +108,6 @@ app.post('/api/register', async (req, res) => {
         const cDate = new Date(user.created_at || new Date());
         cDate.setDate(cDate.getDate() + 30);
 
-        // FLUTTER ILOVANGIZ KUTAYOTGAN ANIQ FORMAT:
         return res.status(200).json({
             trialEnd: cDate.toISOString(),
             blocked: user.isBlocked ?? false
@@ -172,7 +172,7 @@ app.post('/api/block', async (req, res) => {
                 'Prefer': 'return=representation'
             },
             body: JSON.stringify({ 
-                isBlocked: blocked // Sizning bazangizdagi aniq ustun nomi
+                isBlocked: blocked 
             })
         });
 
@@ -188,7 +188,7 @@ app.post('/api/block', async (req, res) => {
     }
 });
 
-// 5. DELETE /api/users/:deviceId — Qurilmani bazadan butunlay o'chirish (Admin panel uchun)
+// 5. DELETE /api/users/:deviceId — Qurilmani bazadan o'chirish (Admin panel uchun)
 app.delete('/api/users/:deviceId', async (req, res) => {
     try {
         const { deviceId } = req.params;
@@ -197,8 +197,7 @@ app.delete('/api/users/:deviceId', async (req, res) => {
             method: 'DELETE',
             headers: {
                 'apikey': supabaseKey,
-                'Authorization': `Bearer ${supabaseKey}`,
-                'Prefer': 'return=representation'
+                'Authorization': `Bearer ${supabaseKey}`
             }
         });
 
