@@ -16,7 +16,7 @@ app.use(cors({
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
-// 1. GET /api/users — Foydalanuvchilarni olish
+// 1. GET /api/users — Barcha foydalanuvchilarni Admin Panel uchun olish
 app.get('/api/users', async (req, res) => {
     try {
         const response = await fetch(`${supabaseUrl}/rest/v1/users?select=*&order=created_at.desc`, {
@@ -33,33 +33,35 @@ app.get('/api/users', async (req, res) => {
 
         const data = await response.json();
 
-        // Kunlarni hisoblash
-        const usersWithDays = data.map(user => {
-            const createdDate = new Date(user.created_at);
-            const today = new Date();
-            const diffTime = Math.abs(today - createdDate);
-            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-            const daysLeft = Math.max(0, 30 - diffDays);
-            const isExpired = diffDays >= 30;
+        // Admin panelga qulay bo'lishi uchun joriy ma'lumotlarni qayta ishlaymiz
+        const processedUsers = data.map(user => {
+            // Agar bazada trialEnd bo'lsa o'shani oladi, bo'lmasa yaratilgan sanaga 30 kun qo'shadi
+            let trialEndStr = user.trialEnd;
+            if (!trialEndStr) {
+                const cDate = new Date(user.created_at);
+                cDate.setDate(cDate.getDate() + 30);
+                trialEndStr = cDate.toISOString();
+            }
 
             return {
                 ...user,
-                daysLeft,
-                isExpired
+                trialEnd: trialEndStr,
+                // Flutter'dagi kabi 'blocked' (isBlocked emas) maydonini qo'llaymiz
+                blocked: user.blocked ?? user.isBlocked ?? false 
             };
         });
 
-        return res.status(200).json(usersWithDays);
+        return res.status(200).json(processedUsers);
     } catch (err) {
         console.error(err);
         return res.status(500).json({ error: err.message });
     }
 });
 
-// 2. POST /api/register — Qurilmani ro'yxatdan o'tkazish/tekshirish
+// 2. POST /api/register — Qurilmani ism va telefon bilan ro'yxatdan o'tkazish (Flutter uchun)
 app.post('/api/register', async (req, res) => {
     try {
-        const { deviceId, deviceName } = req.body;
+        const { name, phone, deviceId, deviceName } = req.body;
 
         if (!deviceId) {
             return res.status(400).json({ error: "deviceId kiritilishi shart!" });
@@ -76,8 +78,11 @@ app.post('/api/register', async (req, res) => {
         const checkData = await checkRes.json();
         let user = checkData[0];
 
-        // Agar qurilma bazada bo'lmasa, yangi yaratamiz
+        // Agar qurilma bazada bo'lmasa, yangi yaratamiz (30 kunlik sinov muddati bilan)
         if (!user) {
+            const tEnd = new Date();
+            tEnd.setDate(tEnd.getDate() + 30); // 30 kun qo'shish
+
             const insertRes = await fetch(`${supabaseUrl}/rest/v1/users`, {
                 method: 'POST',
                 headers: {
@@ -86,7 +91,14 @@ app.post('/api/register', async (req, res) => {
                     'Content-Type': 'application/json',
                     'Prefer': 'return=representation'
                 },
-                body: JSON.stringify({ deviceId, deviceName })
+                body: JSON.stringify({ 
+                    deviceId, 
+                    deviceName, 
+                    name: name || '', 
+                    phone: phone || '',
+                    trialEnd: tEnd.toISOString(),
+                    blocked: false
+                })
             });
 
             if (!insertRes.ok) {
@@ -98,33 +110,76 @@ app.post('/api/register', async (req, res) => {
             user = insertData[0];
         }
 
-        // Kunlarni hisoblash
-        const createdDate = new Date(user.created_at);
-        const today = new Date();
-        const diffTime = Math.abs(today - createdDate);
-        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-        const daysLeft = Math.max(0, 30 - diffDays);
-        const isExpired = diffDays >= 30;
+        // Agar trialEnd hali belgilanmagan bo'lsa (eski foydalanuvchilar uchun)
+        let finalTrialEnd = user.trialEnd;
+        if (!finalTrialEnd) {
+            const cDate = new Date(user.created_at);
+            cDate.setDate(cDate.getDate() + 30);
+            finalTrialEnd = cDate.toISOString();
+        }
 
+        // FLUTTER KUTAYOTGAN ANIQ KONTRAKT JAVOBI:
         return res.status(200).json({
-            deviceId: user.deviceId,
-            deviceName: user.deviceName,
-            isBlocked: user.isBlocked,
-            isExpired: isExpired,
-            daysUsed: diffDays,
-            daysLeft: daysLeft
+            trialEnd: finalTrialEnd,
+            blocked: user.blocked ?? user.isBlocked ?? false
         });
+
     } catch (err) {
         console.error(err);
         return res.status(500).json({ error: err.message });
     }
 });
 
-// 3. POST /api/block — Qurilmani bloklash yoki ochish
+// 3. GET /api/status — Qurilma holatini tekshirish (Flutter uchun)
+app.get('/api/status', async (req, res) => {
+    try {
+        const { deviceId } = req.query;
+
+        if (!deviceId) {
+            return res.status(400).json({ error: "deviceId shart!" });
+        }
+
+        const checkRes = await fetch(`${supabaseUrl}/rest/v1/users?deviceId=eq.${encodeURIComponent(deviceId)}&select=*`, {
+            headers: {
+                'apikey': supabaseKey,
+                'Authorization': `Bearer ${supabaseKey}`
+            }
+        });
+
+        const checkData = await checkRes.json();
+        const user = checkData[0];
+
+        if (!user) {
+            // Agar foydalanuvchi topilmasa, xavfsiz default qiymat qaytaramiz
+            const defaultDate = new Date();
+            return res.status(200).json({ trialEnd: defaultDate.toISOString(), blocked: false });
+        }
+
+        let finalTrialEnd = user.trialEnd;
+        if (!finalTrialEnd) {
+            const cDate = new Date(user.created_at);
+            cDate.setDate(cDate.getDate() + 30);
+            finalTrialEnd = cDate.toISOString();
+        }
+
+        // FLUTTER KUTAYOTGAN ANIQ KONTRAKT JAVOBI:
+        return res.status(200).json({
+            trialEnd: finalTrialEnd,
+            blocked: user.blocked ?? user.isBlocked ?? false
+        });
+
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// 4. POST /api/block — Qurilmani bloklash yoki ochish (Admin panel uchun)
 app.post('/api/block', async (req, res) => {
     try {
-        const { deviceId, isBlocked } = req.body;
+        const { deviceId, blocked } = req.body;
 
+        // Ikkala maydonni ham (eski va yangi) yangilab ketamiz, xatolik bo'lmasligi uchun
         const updateRes = await fetch(`${supabaseUrl}/rest/v1/users?deviceId=eq.${encodeURIComponent(deviceId)}`, {
             method: 'PATCH',
             headers: {
@@ -133,7 +188,10 @@ app.post('/api/block', async (req, res) => {
                 'Content-Type': 'application/json',
                 'Prefer': 'return=representation'
             },
-            body: JSON.stringify({ isBlocked: isBlocked })
+            body: JSON.stringify({ 
+                blocked: blocked,
+                isBlocked: blocked 
+            })
         });
 
         if (!updateRes.ok) {
@@ -141,15 +199,13 @@ app.post('/api/block', async (req, res) => {
             throw new Error("Supabase Update Error: " + updateErr);
         }
 
-        const updateData = await updateRes.json();
-        return res.status(200).json({ success: true, data: updateData });
+        return res.status(200).json({ success: true });
     } catch (err) {
         console.error(err);
         return res.status(500).json({ error: err.message });
     }
 });
 
-// Serverni portga ulash (mahalliy testlar uchun va Vercel uchun moslashuvchan)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server ${PORT}-portda ishlamoqda...`);
