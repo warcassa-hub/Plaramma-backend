@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plaramma — Boshqaruv Paneli</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+        body { background-color: #f4f6f9; color: #333; padding: 30px; }
+        .container { max-width: 1300px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+        h1 { font-size: 24px; color: #1e293b; }
+        button { cursor: pointer; border: none; font-weight: bold; border-radius: 6px; transition: 0.2s; }
+        .btn-refresh { background-color: #4f46e5; color: white; padding: 12px 20px; font-size: 14px; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+        th, td { padding: 16px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+        th { background-color: #f8fafc; color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 12px; }
+        tr:hover { background-color: #f8fafc; }
+        .badge { padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-block; }
+        .badge-active { background-color: #d1fae5; color: #065f46; }
+        .badge-blocked { background-color: #fee2e2; color: #991b1b; }
+        .badge-expired { background-color: #ffedd5; color: #9a3412; }
+        .actions-cell { display: flex; gap: 8px; }
+        .btn-action { padding: 8px 14px; font-size: 13px; color: white; }
+        .btn-extend { background-color: #0284c7; }
+        .btn-extend:hover { background-color: #0369a1; }
+        .btn-block { background-color: #ef4444; }
+        .btn-unblock { background-color: #10b981; }
+        .btn-delete { background-color: #64748b; }
+        .loading { text-align: center; padding: 40px; color: #64748b; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Plaramma Admin — Foydalanuvchilar va Qurilmalar</h1>
+        <button class="btn-refresh" onclick="fetchUsers()">🔄 Yangilash</button>
+    </header>
+
+    <div id="loadingStatus" class="loading">Yuklanmoqda...</div>
+
+    <table id="adminTable" style="display: none;">
+        <thead>
+            <tr>
+                <th>Foydalanuvchi</th>
+                <th>Telefon</th>
+                <th>Qurilma / ID</th>
+                <th>Litsenziya Yakuni</th>
+                <th>Holati</th>
+                <th>Amallar</th>
+            </tr>
+        </thead>
+        <tbody id="userRows"></tbody>
+    </table>
+</div>
+
+<script>
+    const API_URL = "https://plaramma-backend.vercel.app/api";
+
+    async function fetchUsers() {
+        const tbody = document.getElementById('userRows');
+        const table = document.getElementById('adminTable');
+        const loading = document.getElementById('loadingStatus');
+
+        loading.style.display = "block";
+        table.style.display = "none";
+
+        try {
+            const response = await fetch(`${API_URL}/users`);
+            const users = await response.json();
+            
+            tbody.innerHTML = "";
+            if (!users || users.length === 0) {
+                loading.innerText = "Hech qanday qurilma topilmadi.";
+                return;
+            }
+
+            users.forEach(user => {
+                const dateOptions = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit' };
+                const trialDate = new Date(user.trialEnd).toLocaleDateString('uz-UZ', dateOptions);
+                const isExpired = new Date(user.trialEnd) < new Date();
+
+                let statusBadge = `<span class="badge badge-active">Faol</span>`;
+                if (user.blocked) {
+                    statusBadge = `<span class="badge badge-blocked">Bloklangan</span>`;
+                } else if (isExpired) {
+                    statusBadge = `<span class="badge badge-expired">Muddati o'tgan</span>`;
+                }
+
+                const extendBtn = `<button class="btn-action btn-extend" onclick="extendLicense('${user.deviceId}')">➕ 1 oy qo'shish</button>`;
+
+                const blockBtn = user.blocked
+                    ? `<button class="btn-action btn-unblock" onclick="toggleBlock('${user.deviceId}', false)">🔓 Ochish</button>`
+                    : `<button class="btn-action btn-block" onclick="toggleBlock('${user.deviceId}', true)">🔒 Bloklash</button>`;
+
+                const deleteBtn = `<button class="btn-action btn-delete" onclick="deleteUser('${user.deviceId}')">🗑️ O'chirish</button>`;
+
+                tbody.innerHTML += `
+                    <tr>
+                        <td><strong>${user.name}</strong></td>
+                        <td>${user.phone}</td>
+                        <td>
+                            <strong>${user.deviceName}</strong><br>
+                            <code style="font-size: 11px; color: #94a3b8;">${user.deviceId}</code>
+                        </td>
+                        <td>${trialDate}</td>
+                        <td>${statusBadge}</td>
+                        <td>
+                            <div class="actions-cell">
+                                ${extendBtn}
+                                ${blockBtn}
+                                ${deleteBtn}
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            loading.style.display = "none";
+            table.style.display = "table";
+
+        } catch (err) {
+            loading.innerHTML = `Xatolik yuz berdi.`;
+        }
+    }
+
+    async function extendLicense(deviceId) {
+        if (!confirm("Ushbu foydalanuvchiga litsenziyani +30 kunga uzaytirmoqchimisiz?")) return;
+        try {
+            const res = await fetch(`${API_URL}/extend`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deviceId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                alert("Litsenziya muvaffaqiyatli uzaytirildi!");
+                fetchUsers();
+            }
+        } catch (e) { alert("Xato."); }
+    }
+
+    async function toggleBlock(deviceId, shouldBlock) {
+        try {
+            const res = await fetch(`${API_URL}/block`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deviceId, blocked: shouldBlock })
+            });
+            if ((await res.json()).success) fetchUsers();
+        } catch (e) { alert("Xato."); }
+    }
+
+    async function deleteUser(deviceId) {
+        if (!confirm("O'chirilsinmi?")) return;
+        try {
+            const res = await fetch(`${API_URL}/users/${deviceId}`, { method: 'DELETE' });
+            if ((await res.json()).success) fetchUsers();
+        } catch (e) { alert("Xato."); }
+    }
+
+    window.onload = fetchUsers;
+</script>
+</body>
+</html>
