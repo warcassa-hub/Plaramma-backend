@@ -3,12 +3,13 @@ const cors = require('cors');
 
 const app = express();
 
+// JSON ma'lumotlarni o'qish uchun ruxsat berish
 app.use(express.json());
 
-// CORS sozlamalari
+// CORS ruxsatnomalari (Admin panel va Flutter ilova muammosiz ulanishi uchun)
 app.use(cors({
     origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -42,7 +43,7 @@ app.get('/api/users', async (req, res) => {
                 id: user.id,
                 deviceId: user.deviceId,
                 deviceName: user.deviceName,
-                name: "Foydalanuvchi #" + user.id, // ism ustuni yo'qligi uchun dinamik ID beramiz
+                name: "Foydalanuvchi #" + user.id, // jadvalda name yo'qligi uchun dinamik ID beramiz
                 phone: "Kiritilmagan",
                 trialEnd: cDate.toISOString(),
                 blocked: user.isBlocked ?? false // bazadagi 'isBlocked'ni 'blocked'ga o'giramiz
@@ -178,6 +179,32 @@ app.post('/api/block', async (req, res) => {
         if (!updateRes.ok) {
             const updateErr = await updateRes.text();
             throw new Error("Supabase Update Error: " + updateErr);
+        }
+
+        return res.status(200).json({ success: true });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// 5. DELETE /api/users/:deviceId — Qurilmani bazadan butunlay o'chirish (Admin panel uchun)
+app.delete('/api/users/:deviceId', async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+
+        const deleteRes = await fetch(`${supabaseUrl}/rest/v1/users?deviceId=eq.${encodeURIComponent(deviceId)}`, {
+            method: 'DELETE',
+            headers: {
+                'apikey': supabaseKey,
+                'Authorization': `Bearer ${supabaseKey}`,
+                'Prefer': 'return=representation'
+            }
+        });
+
+        if (!deleteRes.ok) {
+            const deleteErr = await deleteRes.text();
+            throw new Error("Supabase Delete Error: " + deleteErr);
         }
 
         return res.status(200).json({ success: true });
